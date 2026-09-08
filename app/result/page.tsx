@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Download, RotateCcw, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, TrendingUp } from "lucide-react";
+import { Download, FileText, RotateCcw, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, TrendingUp } from "lucide-react";
 import { BusinessPlan } from "@/types";
 
 export default function ResultPage() {
@@ -28,6 +28,139 @@ export default function ResultPage() {
       next.has(i) ? next.delete(i) : next.add(i);
       return next;
     });
+  };
+
+  const handleDownloadDocx = () => {
+    if (!plan) return;
+    const sectionsHtml = plan.sections
+      .map(
+        (s) => `
+        <h2 style="font-size:16pt;margin-top:24pt;margin-bottom:8pt;color:#1e3a5f;border-bottom:1px solid #ccc;padding-bottom:4pt;">${s.title}${s.evaluationCriterion ? ` <span style="font-size:11pt;color:#666;">(${s.evaluationCriterion.weight}점)</span>` : ""}</h2>
+        <p style="font-size:11pt;line-height:1.8;white-space:pre-wrap;">${s.content}</p>`
+      )
+      .join("");
+
+    const diagnosticHtml = plan.selfDiagnosticReport.criteriaScores
+      .map(
+        (c) => `
+        <tr>
+          <td style="padding:6pt;border:1px solid #ddd;">${c.category}</td>
+          <td style="padding:6pt;border:1px solid #ddd;text-align:center;">${c.estimatedScore}/${c.weight}</td>
+          <td style="padding:6pt;border:1px solid #ddd;">${c.feedback}</td>
+        </tr>`
+      )
+      .join("");
+
+    const html = `
+      <html xmlns:o="urn:schemas-microsoft-com:office:office"
+            xmlns:w="urn:schemas-microsoft-com:office:word"
+            xmlns="http://www.w3.org/TR/REC-html40">
+      <head>
+        <meta charset="utf-8">
+        <title>${plan.announcementTitle} 사업계획서</title>
+        <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>90</w:Zoom><w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->
+        <style>
+          body { font-family: "맑은 고딕", "Malgun Gothic", sans-serif; font-size:11pt; color:#222; margin:40pt; }
+          h1 { font-size:20pt; color:#1e3a5f; margin-bottom:4pt; }
+          h2 { font-size:14pt; }
+          table { border-collapse:collapse; width:100%; margin-top:12pt; }
+          th { background:#1e3a5f; color:#fff; padding:6pt; border:1px solid #ddd; }
+        </style>
+      </head>
+      <body>
+        <h1>${plan.announcementTitle}</h1>
+        <p style="color:#666;font-size:10pt;">사업계획서 초안 · 생성일: ${plan.createdAt.toLocaleDateString("ko-KR")} · 예상 점수율: ${plan.selfDiagnosticReport.percentage}%</p>
+        <hr style="border:1px solid #1e3a5f;margin:16pt 0;"/>
+        ${sectionsHtml}
+        <h2 style="font-size:16pt;margin-top:32pt;color:#1e3a5f;border-bottom:1px solid #ccc;padding-bottom:4pt;">📊 자가진단 리포트</h2>
+        <table>
+          <tr><th>평가항목</th><th>예상점수/배점</th><th>피드백</th></tr>
+          ${diagnosticHtml}
+        </table>
+        <h3 style="margin-top:20pt;">✅ 강점</h3>
+        <ul>${plan.selfDiagnosticReport.strengths.map((s) => `<li>${s}</li>`).join("")}</ul>
+        <h3>⚠️ 보완 필요 사항</h3>
+        <ul>${plan.selfDiagnosticReport.improvements.map((s) => `<li>${s}</li>`).join("")}</ul>
+        <p style="color:#999;font-size:9pt;margin-top:32pt;">※ AI가 생성한 초안은 반드시 본인이 검토·수정 후 제출하세요.</p>
+      </body>
+      </html>`;
+
+    const blob = new Blob(["﻿", html], {
+      type: "application/vnd.ms-word;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `사업계획서_초안_${Date.now()}.doc`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadPdf = () => {
+    if (!plan) return;
+    const sectionsHtml = plan.sections
+      .map(
+        (s) => `
+        <div class="section">
+          <h2>${s.title}${s.evaluationCriterion ? ` <span class="badge">${s.evaluationCriterion.weight}점</span>` : ""}</h2>
+          <p>${s.content.replace(/\n/g, "<br/>")}</p>
+        </div>`
+      )
+      .join("");
+
+    const diagnosticRows = plan.selfDiagnosticReport.criteriaScores
+      .map(
+        (c) => `<tr>
+          <td>${c.category}</td>
+          <td class="center">${c.estimatedScore}/${c.weight}점</td>
+          <td>${c.feedback}</td>
+        </tr>`
+      )
+      .join("");
+
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+    printWindow.document.write(`
+      <!DOCTYPE html><html><head>
+      <meta charset="utf-8">
+      <title>${plan.announcementTitle} 사업계획서</title>
+      <style>
+        @page { margin: 20mm; }
+        body { font-family: "맑은 고딕","Malgun Gothic",sans-serif; font-size:10pt; color:#222; }
+        h1 { font-size:18pt; color:#1e3a5f; border-bottom:2px solid #1e3a5f; padding-bottom:6pt; }
+        .meta { color:#666; font-size:9pt; margin-bottom:16pt; }
+        .section { margin-bottom:20pt; page-break-inside:avoid; }
+        .section h2 { font-size:13pt; color:#1e3a5f; border-left:4px solid #1e3a5f; padding-left:8pt; margin-bottom:8pt; }
+        .badge { font-size:9pt; color:#666; background:#eee; padding:2pt 6pt; border-radius:3pt; margin-left:6pt; }
+        p { line-height:1.8; white-space:pre-wrap; }
+        table { border-collapse:collapse; width:100%; margin:8pt 0; font-size:9pt; }
+        th { background:#1e3a5f; color:#fff; padding:5pt; border:1px solid #ccc; }
+        td { padding:5pt; border:1px solid #ccc; }
+        .center { text-align:center; }
+        ul { margin:4pt 0; padding-left:16pt; }
+        li { margin-bottom:3pt; }
+        .note { color:#999; font-size:8pt; margin-top:24pt; border-top:1px solid #eee; padding-top:8pt; }
+      </style>
+      </head><body>
+      <h1>${plan.announcementTitle}</h1>
+      <p class="meta">사업계획서 초안 · 생성일: ${plan.createdAt.toLocaleDateString("ko-KR")} · 예상 점수율: ${plan.selfDiagnosticReport.percentage}% (${plan.selfDiagnosticReport.totalScore}/${plan.selfDiagnosticReport.maxScore}점)</p>
+      ${sectionsHtml}
+      <div class="section">
+        <h2>📊 자가진단 리포트</h2>
+        <table>
+          <tr><th>평가항목</th><th>예상점수</th><th>피드백</th></tr>
+          ${diagnosticRows}
+        </table>
+        <h3 style="margin-top:12pt;">✅ 강점</h3>
+        <ul>${plan.selfDiagnosticReport.strengths.map((s) => `<li>${s}</li>`).join("")}</ul>
+        <h3>⚠️ 보완 필요 사항</h3>
+        <ul>${plan.selfDiagnosticReport.improvements.map((s) => `<li>${s}</li>`).join("")}</ul>
+      </div>
+      <p class="note">※ AI가 생성한 초안은 반드시 본인이 검토·수정 후 제출하세요.</p>
+      </body></html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => { printWindow.print(); }, 500);
   };
 
   const handleDownloadText = () => {
@@ -63,10 +196,14 @@ export default function ResultPage() {
   if (!plan) return null;
 
   const { selfDiagnosticReport: report } = plan;
+  // 숫자 보장 (AI가 문자열로 반환했을 경우 대비)
+  const totalScore = Number(report.totalScore) || 0;
+  const maxScore = Number(report.maxScore) || 0;
+  const percentage = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : Number(report.percentage) || 0;
   const scoreColor =
-    report.percentage >= 80
+    percentage >= 80
       ? "text-green-600"
-      : report.percentage >= 60
+      : percentage >= 60
       ? "text-yellow-600"
       : "text-red-600";
 
@@ -84,16 +221,16 @@ export default function ResultPage() {
         <div className="mb-6 grid grid-cols-3 gap-3">
           <div className="rounded-xl bg-white p-4 text-center shadow-sm">
             <div className={`text-3xl font-bold ${scoreColor}`}>
-              {report.percentage}%
+              {percentage}%
             </div>
             <div className="mt-1 text-xs text-gray-500">예상 점수율</div>
           </div>
           <div className="rounded-xl bg-white p-4 text-center shadow-sm">
             <div className="text-3xl font-bold text-gray-800">
-              {report.totalScore}
-              <span className="text-lg text-gray-400">/{report.maxScore}</span>
+              {totalScore}
+              <span className="text-lg text-gray-400">/{maxScore}점</span>
             </div>
-            <div className="mt-1 text-xs text-gray-500">배점 합계</div>
+            <div className="mt-1 text-xs text-gray-500">예상 점수</div>
           </div>
           <div className="rounded-xl bg-white p-4 text-center shadow-sm">
             <div className="text-3xl font-bold text-blue-600">{plan.sections.length}</div>
@@ -164,14 +301,16 @@ export default function ResultPage() {
           <div className="space-y-4">
             {/* 항목별 점수 */}
             {report.criteriaScores.map((c, i) => {
-              const pct = Math.round((c.estimatedScore / c.weight) * 100);
+              const score = Number(c.estimatedScore) || 0;
+              const weight = Number(c.weight) || 0;
+              const pct = weight > 0 ? Math.min(Math.round((score / weight) * 100), 100) : 0;
               const color = pct >= 80 ? "bg-green-500" : pct >= 60 ? "bg-yellow-400" : "bg-red-400";
               return (
                 <div key={i} className="rounded-xl bg-white p-4 shadow-sm">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="font-semibold text-gray-800">{c.category}</span>
                     <span className="text-sm text-gray-500">
-                      {c.estimatedScore} / {c.weight}점
+                      {score}점 / {weight}점
                     </span>
                   </div>
                   <div className="mb-2 h-2 overflow-hidden rounded-full bg-gray-100">
@@ -226,21 +365,39 @@ export default function ResultPage() {
         )}
 
         {/* 액션 버튼 */}
-        <div className="mt-6 flex gap-3">
-          <button
-            onClick={() => router.push("/upload")}
-            className="flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium text-gray-600 hover:bg-gray-50"
-          >
-            <RotateCcw className="h-4 w-4" />
-            다른 공고 작성
-          </button>
-          <button
-            onClick={handleDownloadText}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 font-semibold text-white hover:bg-blue-700"
-          >
-            <Download className="h-5 w-5" />
-            TXT 다운로드
-          </button>
+        <div className="mt-6 flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={handleDownloadDocx}
+              className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 font-semibold text-white hover:bg-blue-700"
+            >
+              <FileText className="h-5 w-5" />
+              DOC 다운로드
+            </button>
+            <button
+              onClick={handleDownloadPdf}
+              className="flex items-center justify-center gap-2 rounded-xl bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700"
+            >
+              <Download className="h-5 w-5" />
+              PDF 저장 (인쇄)
+            </button>
+          </div>
+          <div className="flex gap-3">
+            <button
+              onClick={() => router.push("/upload")}
+              className="flex items-center gap-2 rounded-xl border px-4 py-3 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              <RotateCcw className="h-4 w-4" />
+              다른 공고 작성
+            </button>
+            <button
+              onClick={handleDownloadText}
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl border py-3 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              <Download className="h-4 w-4" />
+              TXT
+            </button>
+          </div>
         </div>
 
         <p className="mt-4 text-center text-xs text-gray-400">

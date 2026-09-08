@@ -73,6 +73,13 @@ export interface SelfDiagnosticReport {
   improvements: string[];
 }
 
+// 신청서 양식 섹션
+export interface TemplateSection {
+  title: string;
+  charLimit?: number;
+  description?: string;
+}
+
 // API 요청/응답 타입
 export interface ParseRequest {
   fileBase64: string;
@@ -88,6 +95,7 @@ export interface ParseResponse {
 export interface GenerateRequest {
   analysis: AnnouncementAnalysis;
   answers: InterviewAnswers;
+  templateSections?: TemplateSection[];
 }
 
 export interface GenerateResponse {

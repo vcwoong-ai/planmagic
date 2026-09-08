@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, FileText, AlertCircle, Loader2, ArrowRight } from "lucide-react";
+import { Upload, FileText, AlertCircle, Loader2, ArrowRight, ClipboardList, X, CheckCircle } from "lucide-react";
 import { fileToBase64 } from "@/lib/utils";
-import { AnnouncementAnalysis } from "@/types";
+import { AnnouncementAnalysis, TemplateSection } from "@/types";
 
 export default function UploadPage() {
   const router = useRouter();
@@ -12,6 +12,10 @@ export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 신청서 양식
+  const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const templateInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback((f: File) => {
     if (f.type !== "application/pdf" && !f.name.endsWith(".txt")) {
@@ -36,9 +40,12 @@ export default function UploadPage() {
     [handleFile]
   );
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) handleFile(f);
+  const handleTemplateFile = (f: File) => {
+    if (f.type !== "application/pdf" && !f.name.endsWith(".txt") && !f.name.endsWith(".hwp")) {
+      return;
+    }
+    if (f.size > 20 * 1024 * 1024) return;
+    setTemplateFile(f);
   };
 
   const handleAnalyze = async () => {
@@ -60,14 +67,38 @@ export default function UploadPage() {
         return;
       }
 
-      // 분석 결과를 sessionStorage에 저장 후 인터뷰 페이지로 이동
       sessionStorage.setItem(
         "announcement",
         JSON.stringify(data.analysis as AnnouncementAnalysis)
       );
+
+      // 신청서 양식도 파싱
+      if (templateFile) {
+        try {
+          const templateBase64 = await fileToBase64(templateFile);
+          const tRes = await fetch("/api/parse-template", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fileBase64: templateBase64, fileName: templateFile.name }),
+          });
+          const tData = await tRes.json();
+          if (tData.success && tData.sections?.length > 0) {
+            sessionStorage.setItem("templateSections", JSON.stringify(tData.sections as TemplateSection[]));
+          } else {
+            sessionStorage.removeItem("templateSections");
+          }
+        } catch {
+          // 양식 파싱 실패해도 계속 진행
+          sessionStorage.removeItem("templateSections");
+        }
+      } else {
+        sessionStorage.removeItem("templateSections");
+      }
+
       router.push("/interview");
-    } catch {
-      setError("네트워크 오류가 발생했습니다. 다시 시도해주세요.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`네트워크 오류가 발생했습니다. 다시 시도해주세요. (${msg})`);
     } finally {
       setLoading(false);
     }
@@ -87,7 +118,7 @@ export default function UploadPage() {
           </p>
         </div>
 
-        {/* 업로드 영역 */}
+        {/* 공고문 업로드 */}
         <div
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
           onDragLeave={() => setDragging(false)}
@@ -103,25 +134,21 @@ export default function UploadPage() {
           <input
             type="file"
             accept=".pdf,.txt"
-            onChange={handleInputChange}
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
             className="absolute inset-0 cursor-pointer opacity-0"
           />
           {file ? (
             <div className="flex flex-col items-center gap-2">
               <FileText className="h-12 w-12 text-green-500" />
               <p className="font-semibold text-gray-900">{file.name}</p>
-              <p className="text-sm text-gray-500">
-                {(file.size / 1024 / 1024).toFixed(2)} MB
-              </p>
-              <p className="text-sm text-green-600">✓ 파일이 선택되었습니다</p>
+              <p className="text-sm text-gray-500">{(file.size / 1024 / 1024).toFixed(2)} MB</p>
+              <p className="text-sm text-green-600">✓ 공고문 선택 완료</p>
             </div>
           ) : (
             <div className="flex flex-col items-center gap-3">
               <Upload className="h-12 w-12 text-gray-400" />
               <div>
-                <p className="font-semibold text-gray-700">
-                  클릭하거나 파일을 끌어다 놓으세요
-                </p>
+                <p className="font-semibold text-gray-700">공고문 PDF를 클릭하거나 끌어다 놓으세요</p>
                 <p className="mt-1 text-sm text-gray-500">PDF, TXT · 최대 20MB</p>
               </div>
             </div>
@@ -136,7 +163,47 @@ export default function UploadPage() {
           </div>
         )}
 
-        {/* 공고문 없을 때 샘플 안내 */}
+        {/* 신청서 양식 (선택) */}
+        <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <ClipboardList className="h-4 w-4 text-indigo-500" />
+            <span className="text-sm font-semibold text-gray-800">신청서 양식 업로드</span>
+            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">선택</span>
+          </div>
+          <p className="mb-3 text-xs text-gray-500">
+            공고에서 제공하는 사업계획서 양식(HWP/PDF)을 올리면 그 양식에 맞춰 내용을 채워서 DOC 파일로 제공합니다.
+          </p>
+
+          {templateFile ? (
+            <div className="flex items-center gap-3 rounded-xl bg-indigo-50 px-4 py-3">
+              <CheckCircle className="h-5 w-5 flex-shrink-0 text-indigo-500" />
+              <div className="flex-1 min-w-0">
+                <p className="truncate text-sm font-medium text-gray-900">{templateFile.name}</p>
+                <p className="text-xs text-gray-500">{(templateFile.size / 1024 / 1024).toFixed(2)} MB · 양식 구조를 분석합니다</p>
+              </div>
+              <button
+                onClick={() => { setTemplateFile(null); if (templateInputRef.current) templateInputRef.current.value = ""; }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border-2 border-dashed border-gray-200 py-4 text-sm text-gray-500 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-600 transition-colors">
+              <input
+                ref={templateInputRef}
+                type="file"
+                accept=".pdf,.txt,.hwp"
+                className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleTemplateFile(f); }}
+              />
+              <Upload className="h-4 w-4" />
+              사업계획서 양식 파일 선택 (PDF, HWP, TXT)
+            </label>
+          )}
+        </div>
+
+        {/* 공고문 없을 때 안내 */}
         <div className="mb-6 rounded-xl bg-blue-50 p-4 text-sm text-blue-700">
           💡 기업마당(www.bizinfo.go.kr) 또는 K-Startup에서 공고문 PDF를 다운로드하세요.
         </div>
@@ -150,7 +217,7 @@ export default function UploadPage() {
           {loading ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin" />
-              공고문 분석 중...
+              {templateFile ? "공고문 + 양식 분석 중..." : "공고문 분석 중..."}
             </>
           ) : (
             <>

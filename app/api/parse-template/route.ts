@@ -1,17 +1,52 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOpenRouterClient, PARSE_MODEL } from "@/lib/openrouter";
-import { buildParsePrompt } from "@/lib/prompts";
-import { AnnouncementAnalysis, ParseResponse } from "@/types";
+import { TemplateSection } from "@/types";
 
-// Vercel Hobby 플랜 기본 10초 → 60초로 확장
 export const maxDuration = 60;
+
+interface ParseTemplateRequest {
+  fileBase64: string;
+  fileName: string;
+}
+
+interface ParseTemplateResponse {
+  success: boolean;
+  sections?: TemplateSection[];
+  error?: string;
+}
+
+function buildParseTemplatePrompt(text: string): string {
+  return `당신은 정부지원사업 신청서 양식 분석 전문가입니다.
+다음 신청서 양식 텍스트를 분석하여 작성해야 할 섹션(항목) 목록을 추출해주세요.
+**모든 섹션 제목은 원문 그대로 유지하세요.**
+
+<양식>
+${text.slice(0, 8000)}
+</양식>
+
+신청서에서 실제로 내용을 작성해야 하는 섹션만 추출하세요.
+(목차, 안내문, 서명란, 첨부서류 목록 등은 제외)
+
+JSON만 출력하고, 마크다운 코드 블록 없이 순수 JSON만 출력하세요:
+{
+  "sections": [
+    {
+      "title": "섹션 제목 (원문 그대로)",
+      "charLimit": 500,
+      "description": "작성 가이드라인 (있는 경우만)"
+    }
+  ]
+}
+
+참고: charLimit이 명시되지 않은 경우 0 또는 생략하세요.`;
+}
 
 export async function POST(request: NextRequest) {
   try {
-    const { fileBase64, fileName } = await request.json();
+    const { fileBase64, fileName }: ParseTemplateRequest = await request.json();
 
     if (!fileBase64) {
-      return NextResponse.json<ParseResponse>(
+      return NextResponse.json<ParseTemplateResponse>(
         { success: false, error: "파일이 없습니다." },
         { status: 400 }
       );
@@ -20,7 +55,6 @@ export async function POST(request: NextRequest) {
     let extractedText = "";
 
     if (fileName?.toLowerCase().endsWith(".pdf")) {
-      // DOMMatrix polyfill — Vercel serverless에는 브라우저 API가 없음
       if (typeof globalThis.DOMMatrix === "undefined") {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (globalThis as any).DOMMatrix = class DOMMatrix {
@@ -52,8 +86,6 @@ export async function POST(request: NextRequest) {
           toJSON() { return {}; }
         };
       }
-
-      // PDF → 텍스트 추출 (pdf-parse)
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const pdfParse = require("pdf-parse");
       const buffer = Buffer.from(fileBase64, "base64");
@@ -63,8 +95,14 @@ export async function POST(request: NextRequest) {
       extractedText = Buffer.from(fileBase64, "base64").toString("utf-8");
     }
 
-    // 제어문자 제거 (AI JSON 생성 오류 방지)
     extractedText = extractedText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+
+    if (!extractedText.trim()) {
+      return NextResponse.json<ParseTemplateResponse>(
+        { success: false, error: "양식에서 텍스트를 추출할 수 없습니다." },
+        { status: 422 }
+      );
+    }
 
     const completion = await getOpenRouterClient().chat.completions.create({
       model: PARSE_MODEL,
@@ -72,50 +110,51 @@ export async function POST(request: NextRequest) {
       messages: [
         {
           role: "user",
-          content: buildParsePrompt(extractedText),
+          content: buildParseTemplatePrompt(extractedText),
         },
       ],
     });
 
     const responseText = completion.choices[0]?.message?.content ?? "";
-
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
-      return NextResponse.json<ParseResponse>(
-        { success: false, error: "공고문 형식을 인식할 수 없습니다." },
+      return NextResponse.json<ParseTemplateResponse>(
+        { success: false, error: "양식 구조를 인식할 수 없습니다." },
         { status: 422 }
       );
     }
 
-    // AI가 JSON 문자열 안에 개행문자를 그대로 넣는 경우 파싱 실패 → 정제 후 재시도
-    let analysis: AnnouncementAnalysis;
+    let parsed: { sections: TemplateSection[] };
     try {
-      analysis = JSON.parse(jsonMatch[0]);
+      parsed = JSON.parse(jsonMatch[0]);
     } catch {
-      // 1차: 개행/탭을 공백으로 치환
       const cleaned = jsonMatch[0].replace(/\r\n/g, " ").replace(/\r/g, " ").replace(/\n/g, " ").replace(/\t/g, " ");
       try {
-        analysis = JSON.parse(cleaned);
+        parsed = JSON.parse(cleaned);
       } catch {
-        // 2차: 제어문자 전체 제거
         const stripped = cleaned.replace(/[\x00-\x1F\x7F]/g, " ");
         try {
-          analysis = JSON.parse(stripped);
-        } catch (finalErr) {
-          return NextResponse.json<ParseResponse>(
-            { success: false, error: "공고문 형식을 인식할 수 없습니다. 다시 시도해주세요." },
+          parsed = JSON.parse(stripped);
+        } catch {
+          return NextResponse.json<ParseTemplateResponse>(
+            { success: false, error: "양식 구조를 인식할 수 없습니다. 다시 시도해주세요." },
             { status: 422 }
           );
         }
       }
     }
-    analysis.rawText = extractedText.slice(0, 2000);
 
-    return NextResponse.json<ParseResponse>({ success: true, analysis });
+    const sections: TemplateSection[] = (parsed.sections ?? []).map((s) => ({
+      title: s.title ?? "",
+      charLimit: s.charLimit && s.charLimit > 0 ? s.charLimit : undefined,
+      description: s.description || undefined,
+    })).filter((s) => s.title.trim().length > 0);
+
+    return NextResponse.json<ParseTemplateResponse>({ success: true, sections });
   } catch (error) {
-    console.error("Parse error:", error);
+    console.error("ParseTemplate error:", error);
     const msg = error instanceof Error ? error.message : String(error);
-    return NextResponse.json<ParseResponse>(
+    return NextResponse.json<ParseTemplateResponse>(
       { success: false, error: `서버 오류: ${msg}` },
       { status: 500 }
     );

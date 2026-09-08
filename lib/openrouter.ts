@@ -14,7 +14,7 @@ export function getOpenRouterClient() {
 
 // 공고문 파싱용 — 빠르고 저렴한 모델
 export const PARSE_MODEL =
-  process.env.OPENROUTER_PARSE_MODEL || "google/gemini-2.0-flash";
+  process.env.OPENROUTER_PARSE_MODEL || "google/gemini-2.5-flash-lite";
 
 // 사업계획서 생성용 — 고품질 모델
 export const GENERATE_MODEL =
