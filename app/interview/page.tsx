@@ -1,10 +1,12 @@
 "use client";
 
+import Stepper from "@/components/ui/Stepper";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, ArrowRight, Loader2, Info, Sparkles, Upload, Link, CheckCircle2, X, FileText, ChevronDown, ChevronUp } from "lucide-react";
 import { AnnouncementAnalysis, InterviewAnswers, TemplateSection } from "@/types";
 import { fileToBase64 } from "@/lib/utils";
+import { getCurrentProjectId, updateProject } from "@/lib/storage";
 
 const QUESTIONS: { key: keyof InterviewAnswers; label: string; placeholder: string; group: string }[] = [
   { key: "founderBackground", label: "창업자(대표) 배경", placeholder: "학력, 경력, 관련 분야 전문성을 구체적으로 작성해주세요.", group: "팀/창업자" },
@@ -37,6 +39,7 @@ export default function InterviewPage() {
   const [templateSections, setTemplateSections] = useState<TemplateSection[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [templateNotice, setTemplateNotice] = useState<string | null>(null);
 
   // 자동 채우기 상태
   const [autoFillOpen, setAutoFillOpen] = useState(false);
@@ -55,18 +58,34 @@ export default function InterviewPage() {
       return;
     }
     setAnalysis(JSON.parse(saved));
+    try {
+      const savedAnswers = sessionStorage.getItem("answers");
+      if (savedAnswers) setAnswers((prev) => ({ ...prev, ...JSON.parse(savedAnswers) }));
+    } catch { /* ignore */ }
+    setTemplateNotice(sessionStorage.getItem("templateNotice"));
     const savedTemplate = sessionStorage.getItem("templateSections");
     if (savedTemplate) {
       try { setTemplateSections(JSON.parse(savedTemplate)); } catch { /* ignore */ }
     }
   }, [router]);
 
+  // 답변 자동 저장 (0.8초 디바운스) — 새로고침/재방문 시 이어서 작성
+  useEffect(() => {
+    if (!analysis) return;
+    const t = setTimeout(() => {
+      try { sessionStorage.setItem("answers", JSON.stringify(answers)); } catch { /* ignore */ }
+      const pid = getCurrentProjectId();
+      if (pid) updateProject(pid, { answers });
+    }, 800);
+    return () => clearTimeout(t);
+  }, [answers, analysis]);
+
   const completedCount = Object.values(answers).filter((v) => v.trim().length > 5).length;
   const progress = Math.round((completedCount / QUESTIONS.length) * 100);
 
   const handleAutoFillFile = useCallback((f: File) => {
-    if (f.type !== "application/pdf" && !f.name.endsWith(".txt") && !f.name.endsWith(".docx")) {
-      setAutoFillError("PDF 또는 TXT 파일만 지원합니다.");
+    if (!/\.(pdf|txt|docx|hwp|hwpx)$/i.test(f.name)) {
+      setAutoFillError("PDF, HWP, HWPX, DOCX, TXT 파일만 지원합니다.");
       return;
     }
     if (f.size > 20 * 1024 * 1024) {
@@ -160,6 +179,8 @@ export default function InterviewPage() {
       }
 
       sessionStorage.setItem("plan", JSON.stringify(data.plan));
+      const pid = getCurrentProjectId();
+      if (pid) updateProject(pid, { answers, plan: data.plan });
       router.push("/result");
     } catch {
       setError("네트워크 오류가 발생했습니다.");
@@ -173,14 +194,20 @@ export default function InterviewPage() {
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-12">
       <div className="mx-auto max-w-2xl">
+        <Stepper current={2} />
         {/* 헤더 */}
         <div className="mb-6 text-center">
-          <div className="mb-2 text-sm font-semibold text-blue-600">STEP 02 / 03</div>
           <h1 className="mb-1 text-2xl font-bold text-gray-900">사업 정보 입력</h1>
           <p className="text-sm text-gray-500">
             분석된 공고: <span className="font-medium text-gray-700">{analysis.title}</span>
           </p>
         </div>
+
+        {templateNotice && (
+          <div role="alert" className="mb-4 rounded-xl bg-orange-50 p-3 text-sm text-orange-700">
+            ⚠️ {templateNotice} 한글(HWP)에서 PDF 또는 HWPX로 저장해 다시 올리면 인식률이 높아집니다.
+          </div>
+        )}
 
         {/* ✨ 자동 채우기 패널 */}
         <div className="mb-6 overflow-hidden rounded-2xl border-2 border-blue-200 bg-white shadow-sm">

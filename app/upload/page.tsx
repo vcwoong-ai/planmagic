@@ -1,10 +1,12 @@
 "use client";
 
+import Stepper from "@/components/ui/Stepper";
 import { useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Upload, FileText, AlertCircle, Loader2, ArrowRight, ClipboardList, X, CheckCircle } from "lucide-react";
 import { fileToBase64 } from "@/lib/utils";
 import { AnnouncementAnalysis, TemplateSection } from "@/types";
+import { createProject } from "@/lib/storage";
 
 export default function UploadPage() {
   const router = useRouter();
@@ -18,8 +20,8 @@ export default function UploadPage() {
   const templateInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback((f: File) => {
-    if (f.type !== "application/pdf" && !f.name.endsWith(".txt")) {
-      setError("PDF 또는 텍스트 파일만 업로드 가능합니다.");
+    if (!/\.(pdf|txt|hwp|hwpx|docx)$/i.test(f.name)) {
+      setError("PDF, HWP, HWPX, DOCX, TXT 파일만 업로드 가능합니다.");
       return;
     }
     if (f.size > 20 * 1024 * 1024) {
@@ -41,7 +43,7 @@ export default function UploadPage() {
   );
 
   const handleTemplateFile = (f: File) => {
-    if (f.type !== "application/pdf" && !f.name.endsWith(".txt") && !f.name.endsWith(".hwp")) {
+    if (!/\.(pdf|txt|hwp|hwpx|docx)$/i.test(f.name)) {
       return;
     }
     if (f.size > 20 * 1024 * 1024) return;
@@ -73,6 +75,7 @@ export default function UploadPage() {
       );
 
       // 신청서 양식도 파싱
+      sessionStorage.removeItem("templateNotice");
       if (templateFile) {
         try {
           const templateBase64 = await fileToBase64(templateFile);
@@ -86,14 +89,25 @@ export default function UploadPage() {
             sessionStorage.setItem("templateSections", JSON.stringify(tData.sections as TemplateSection[]));
           } else {
             sessionStorage.removeItem("templateSections");
+            sessionStorage.setItem("templateNotice", tData.error ?? "양식 구조를 인식하지 못해 기본 구성으로 작성합니다.");
           }
         } catch {
           // 양식 파싱 실패해도 계속 진행
           sessionStorage.removeItem("templateSections");
+          sessionStorage.setItem("templateNotice", "양식 분석에 실패해 기본 구성으로 작성합니다.");
         }
       } else {
         sessionStorage.removeItem("templateSections");
       }
+
+      sessionStorage.removeItem("answers");
+      sessionStorage.removeItem("plan");
+      let sections: TemplateSection[] | undefined;
+      try {
+        const t = sessionStorage.getItem("templateSections");
+        if (t) sections = JSON.parse(t);
+      } catch { /* ignore */ }
+      createProject({ analysis: data.analysis as AnnouncementAnalysis, templateSections: sections });
 
       router.push("/interview");
     } catch (err) {
@@ -107,9 +121,9 @@ export default function UploadPage() {
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-12">
       <div className="mx-auto max-w-xl">
+        <Stepper current={1} />
         {/* 헤더 */}
         <div className="mb-8 text-center">
-          <div className="mb-2 text-sm font-semibold text-blue-600">STEP 01 / 03</div>
           <h1 className="mb-2 text-2xl font-bold text-gray-900">공고문 업로드</h1>
           <p className="text-gray-600">
             지원하려는 정부지원사업의 공고문 PDF를 업로드해주세요.
@@ -133,7 +147,7 @@ export default function UploadPage() {
         >
           <input
             type="file"
-            accept=".pdf,.txt"
+            accept=".pdf,.txt,.hwp,.hwpx,.docx"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
             className="absolute inset-0 cursor-pointer opacity-0"
           />
@@ -193,12 +207,12 @@ export default function UploadPage() {
               <input
                 ref={templateInputRef}
                 type="file"
-                accept=".pdf,.txt,.hwp"
+                accept=".pdf,.txt,.hwp,.hwpx,.docx"
                 className="hidden"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleTemplateFile(f); }}
               />
               <Upload className="h-4 w-4" />
-              사업계획서 양식 파일 선택 (PDF, HWP, TXT)
+              사업계획서 양식 파일 선택 (HWP, HWPX, PDF, DOCX)
             </label>
           )}
         </div>

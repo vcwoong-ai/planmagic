@@ -57,6 +57,7 @@ export interface BusinessPlanSection {
   content: string;
   evaluationCriterion?: EvaluationCriterion;
   score?: number; // 자가진단 점수
+  charLimit?: number; // 신청서 양식의 글자수 제한
 }
 
 export interface SelfDiagnosticReport {
@@ -101,5 +102,32 @@ export interface GenerateRequest {
 export interface GenerateResponse {
   success: boolean;
   plan?: BusinessPlan;
+  error?: string;
+}
+
+// 저장된 프로젝트 (브라우저 localStorage)
+export interface SavedProject {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  analysis: AnnouncementAnalysis;
+  templateSections?: TemplateSection[];
+  answers?: Partial<InterviewAnswers>;
+  plan?: BusinessPlan;
+}
+
+export interface RegenerateSectionRequest {
+  analysis: AnnouncementAnalysis;
+  answers: InterviewAnswers;
+  sectionTitle: string;
+  currentContent: string;
+  charLimit?: number;
+  instruction?: string;
+}
+
+export interface RegenerateSectionResponse {
+  success: boolean;
+  content?: string;
   error?: string;
 }

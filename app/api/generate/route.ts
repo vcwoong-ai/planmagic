@@ -102,13 +102,20 @@ export async function POST(request: NextRequest) {
         content: string;
         criterionCategory: string;
       }[]
-    ).map((s) => ({
+    ).map((s, idx) => {
+      const norm = (t: string) => String(t ?? "").replace(/\s+/g, "").toLowerCase();
+      const tpl =
+        templateSections?.find((t) => norm(t.title) === norm(s.title)) ??
+        (templateSections && templateSections.length === generated.sections.length ? templateSections[idx] : undefined);
+      return {
       title: s.title,
-      content: s.content,
+      content: String(s.content ?? ""),
+      charLimit: tpl?.charLimit,
       evaluationCriterion: analysis.evaluationCriteria.find(
         (c) => c.category === s.criterionCategory
       ),
-    }));
+      };
+    });
 
     const plan: BusinessPlan = {
       id: generateId(),

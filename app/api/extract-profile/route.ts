@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getOpenRouterClient, PARSE_MODEL } from "@/lib/openrouter";
+import { extractText } from "@/lib/extract-text";
 import { buildExtractProfilePrompt } from "@/lib/prompts";
 import { InterviewAnswers } from "@/types";
 
@@ -55,51 +56,15 @@ export async function POST(request: NextRequest) {
         );
       }
     } else if (fileBase64) {
-      if (fileName?.toLowerCase().endsWith(".pdf")) {
-        // DOMMatrix polyfill
-        if (typeof globalThis.DOMMatrix === "undefined") {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (globalThis as any).DOMMatrix = class DOMMatrix {
-            a = 1; b = 0; c = 0; d = 1; e = 0; f = 0;
-            m11 = 1; m12 = 0; m13 = 0; m14 = 0;
-            m21 = 0; m22 = 1; m23 = 0; m24 = 0;
-            m31 = 0; m32 = 0; m33 = 1; m34 = 0;
-            m41 = 0; m42 = 0; m43 = 0; m44 = 1;
-            is2D = true; isIdentity = true;
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            constructor(_init?: string | number[]) {}
-            static fromMatrix() { return new DOMMatrix(); }
-            static fromFloat32Array() { return new DOMMatrix(); }
-            static fromFloat64Array() { return new DOMMatrix(); }
-            multiply() { return this; }
-            translate() { return this; }
-            scale() { return this; }
-            rotate() { return this; }
-            rotateAxisAngle() { return this; }
-            skewX() { return this; }
-            skewY() { return this; }
-            flipX() { return this; }
-            flipY() { return this; }
-            inverse() { return this; }
-            transformPoint() { return { x: 0, y: 0, z: 0, w: 1 }; }
-            toFloat32Array() { return new Float32Array(16); }
-            toFloat64Array() { return new Float64Array(16); }
-            toString() { return "matrix(1,0,0,1,0,0)"; }
-            toJSON() { return {}; }
-          };
-        }
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const pdfParse = require("pdf-parse");
-        const buffer = Buffer.from(fileBase64, "base64");
-        const pdfData = await pdfParse(buffer);
-        extractedText = pdfData.text;
-      } else {
-        extractedText = Buffer.from(fileBase64, "base64").toString("utf-8");
+      try {
+        extractedText = await extractText(fileBase64, fileName);
+      } catch (e) {
+        return NextResponse.json<ExtractProfileResponse>(
+          { success: false, error: e instanceof Error ? e.message : "파일을 읽을 수 없습니다." },
+          { status: 422 }
+        );
       }
     }
-
-    // 제어문자 제거 (AI JSON 생성 오류 방지)
-    extractedText = extractedText.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
 
     if (!extractedText.trim()) {
       return NextResponse.json<ExtractProfileResponse>(

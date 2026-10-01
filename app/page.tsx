@@ -12,8 +12,8 @@ export default function HomePage() {
             <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">Beta</span>
           </div>
           <div className="flex items-center gap-4">
-            <Link href="/upload" className="text-sm text-gray-600 hover:text-gray-900">
-              시작하기
+            <Link href="/saved" className="text-sm text-gray-600 hover:text-gray-900">
+              저장한 계획서
             </Link>
             <Link
               href="/upload"
@@ -38,7 +38,7 @@ export default function HomePage() {
             <span className="text-blue-600">사업계획서가 나옵니다</span>
           </h1>
           <p className="mb-8 text-lg text-gray-600">
-            평가기준에 맞춰 자동 생성 · 배점별 자가진단 리포트 · HWP/DOCX 출력
+            평가기준에 맞춰 자동 생성 · 배점별 자가진단 리포트 · Word(.docx)·PDF 출력 · HWP 양식 지원
             <br />
             예비창업패키지 · 초기창업패키지 · 창업도약패키지 · TIPS 지원
           </p>

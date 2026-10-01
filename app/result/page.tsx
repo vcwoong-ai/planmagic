@@ -1,15 +1,28 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import Stepper from "@/components/ui/Stepper";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Download, FileText, RotateCcw, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle, TrendingUp } from "lucide-react";
-import { BusinessPlan } from "@/types";
+import {
+  Download, FileText, RotateCcw, ChevronDown, ChevronUp, CheckCircle2, AlertTriangle,
+  TrendingUp, Pencil, Sparkles, Loader2, Check, FolderOpen,
+} from "lucide-react";
+import { AnnouncementAnalysis, BusinessPlan, InterviewAnswers } from "@/types";
+import { buildDocxBlob, buildText, downloadBlob, openPrintView, safeFileName } from "@/lib/export";
+import { getCurrentProjectId, updateProject } from "@/lib/storage";
 
 export default function ResultPage() {
   const router = useRouter();
   const [plan, setPlan] = useState<BusinessPlan | null>(null);
   const [expandedSections, setExpandedSections] = useState<Set<number>>(new Set([0]));
   const [activeTab, setActiveTab] = useState<"plan" | "diagnostic">("plan");
+  const [saveState, setSaveState] = useState<"saved" | "saving">("saved");
+  const [busyDoc, setBusyDoc] = useState(false);
+  const [regenIdx, setRegenIdx] = useState<number | null>(null);
+  const [instructions, setInstructions] = useState<Record<number, string>>({});
+  const [toast, setToast] = useState<string | null>(null);
+  const ctx = useRef<{ analysis?: AnnouncementAnalysis; answers?: InterviewAnswers }>({});
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const saved = sessionStorage.getItem("plan");
@@ -17,180 +30,107 @@ export default function ResultPage() {
       router.push("/upload");
       return;
     }
-    const parsed = JSON.parse(saved);
-    parsed.createdAt = new Date(parsed.createdAt);
-    setPlan(parsed);
+    try {
+      const parsed = JSON.parse(saved);
+      parsed.createdAt = new Date(parsed.createdAt);
+      setPlan(parsed);
+      const a = sessionStorage.getItem("announcement");
+      const ans = sessionStorage.getItem("answers");
+      ctx.current = { analysis: a ? JSON.parse(a) : undefined, answers: ans ? JSON.parse(ans) : undefined };
+    } catch {
+      router.push("/upload");
+    }
   }, [router]);
 
-  const toggleSection = (i: number) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev);
-      next.has(i) ? next.delete(i) : next.add(i);
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2500);
+  };
+
+  // 수정 내용 자동 저장 (세션 + 브라우저 저장소)
+  const persist = useCallback((next: BusinessPlan) => {
+    setSaveState("saving");
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      try { sessionStorage.setItem("plan", JSON.stringify(next)); } catch { /* ignore */ }
+      const pid = getCurrentProjectId();
+      if (pid) updateProject(pid, { plan: next });
+      setSaveState("saved");
+    }, 600);
+  }, []);
+
+  const updateContent = (i: number, content: string) => {
+    setPlan((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, sections: prev.sections.map((sec, idx) => (idx === i ? { ...sec, content } : sec)) };
+      persist(next);
       return next;
     });
   };
 
-  const handleDownloadDocx = () => {
+  const handleRegenerate = async (i: number) => {
     if (!plan) return;
-    const sectionsHtml = plan.sections
-      .map(
-        (s) => `
-        <h2 style="font-size:16pt;margin-top:24pt;margin-bottom:8pt;color:#1e3a5f;border-bottom:1px solid #ccc;padding-bottom:4pt;">${s.title}${s.evaluationCriterion ? ` <span style="font-size:11pt;color:#666;">(${s.evaluationCriterion.weight}점)</span>` : ""}</h2>
-        <p style="font-size:11pt;line-height:1.8;white-space:pre-wrap;">${s.content}</p>`
-      )
-      .join("");
+    const { analysis, answers } = ctx.current;
+    if (!analysis || !answers) {
+      showToast("원본 입력 정보가 없어 재작성할 수 없습니다. 인터뷰부터 다시 진행해주세요.");
+      return;
+    }
+    setRegenIdx(i);
+    try {
+      const sec = plan.sections[i];
+      const res = await fetch("/api/regenerate-section", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          analysis, answers,
+          sectionTitle: sec.title,
+          currentContent: sec.content,
+          charLimit: sec.charLimit,
+          instruction: instructions[i]?.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        showToast(data.error ?? "재작성에 실패했습니다.");
+      } else {
+        updateContent(i, data.content);
+        showToast("섹션을 다시 작성했습니다.");
+      }
+    } catch {
+      showToast("네트워크 오류가 발생했습니다.");
+    } finally {
+      setRegenIdx(null);
+    }
+  };
 
-    const diagnosticHtml = plan.selfDiagnosticReport.criteriaScores
-      .map(
-        (c) => `
-        <tr>
-          <td style="padding:6pt;border:1px solid #ddd;">${c.category}</td>
-          <td style="padding:6pt;border:1px solid #ddd;text-align:center;">${c.estimatedScore}/${c.weight}</td>
-          <td style="padding:6pt;border:1px solid #ddd;">${c.feedback}</td>
-        </tr>`
-      )
-      .join("");
-
-    const html = `
-      <html xmlns:o="urn:schemas-microsoft-com:office:office"
-            xmlns:w="urn:schemas-microsoft-com:office:word"
-            xmlns="http://www.w3.org/TR/REC-html40">
-      <head>
-        <meta charset="utf-8">
-        <title>${plan.announcementTitle} 사업계획서</title>
-        <!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>90</w:Zoom><w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->
-        <style>
-          body { font-family: "맑은 고딕", "Malgun Gothic", sans-serif; font-size:11pt; color:#222; margin:40pt; }
-          h1 { font-size:20pt; color:#1e3a5f; margin-bottom:4pt; }
-          h2 { font-size:14pt; }
-          table { border-collapse:collapse; width:100%; margin-top:12pt; }
-          th { background:#1e3a5f; color:#fff; padding:6pt; border:1px solid #ddd; }
-        </style>
-      </head>
-      <body>
-        <h1>${plan.announcementTitle}</h1>
-        <p style="color:#666;font-size:10pt;">사업계획서 초안 · 생성일: ${plan.createdAt.toLocaleDateString("ko-KR")} · 예상 점수율: ${plan.selfDiagnosticReport.percentage}%</p>
-        <hr style="border:1px solid #1e3a5f;margin:16pt 0;"/>
-        ${sectionsHtml}
-        <h2 style="font-size:16pt;margin-top:32pt;color:#1e3a5f;border-bottom:1px solid #ccc;padding-bottom:4pt;">📊 자가진단 리포트</h2>
-        <table>
-          <tr><th>평가항목</th><th>예상점수/배점</th><th>피드백</th></tr>
-          ${diagnosticHtml}
-        </table>
-        <h3 style="margin-top:20pt;">✅ 강점</h3>
-        <ul>${plan.selfDiagnosticReport.strengths.map((s) => `<li>${s}</li>`).join("")}</ul>
-        <h3>⚠️ 보완 필요 사항</h3>
-        <ul>${plan.selfDiagnosticReport.improvements.map((s) => `<li>${s}</li>`).join("")}</ul>
-        <p style="color:#999;font-size:9pt;margin-top:32pt;">※ AI가 생성한 초안은 반드시 본인이 검토·수정 후 제출하세요.</p>
-      </body>
-      </html>`;
-
-    const blob = new Blob(["﻿", html], {
-      type: "application/vnd.ms-word;charset=utf-8",
+  const toggleSection = (i: number) => {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
     });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `사업계획서_초안_${Date.now()}.doc`;
-    a.click();
-    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadDocx = async () => {
+    if (!plan) return;
+    setBusyDoc(true);
+    try {
+      downloadBlob(await buildDocxBlob(plan), safeFileName(plan, "docx"));
+    } catch {
+      showToast("DOCX 생성에 실패했습니다.");
+    } finally {
+      setBusyDoc(false);
+    }
   };
 
   const handleDownloadPdf = () => {
-    if (!plan) return;
-    const sectionsHtml = plan.sections
-      .map(
-        (s) => `
-        <div class="section">
-          <h2>${s.title}${s.evaluationCriterion ? ` <span class="badge">${s.evaluationCriterion.weight}점</span>` : ""}</h2>
-          <p>${s.content.replace(/\n/g, "<br/>")}</p>
-        </div>`
-      )
-      .join("");
-
-    const diagnosticRows = plan.selfDiagnosticReport.criteriaScores
-      .map(
-        (c) => `<tr>
-          <td>${c.category}</td>
-          <td class="center">${c.estimatedScore}/${c.weight}점</td>
-          <td>${c.feedback}</td>
-        </tr>`
-      )
-      .join("");
-
-    const printWindow = window.open("", "_blank");
-    if (!printWindow) return;
-    printWindow.document.write(`
-      <!DOCTYPE html><html><head>
-      <meta charset="utf-8">
-      <title>${plan.announcementTitle} 사업계획서</title>
-      <style>
-        @page { margin: 20mm; }
-        body { font-family: "맑은 고딕","Malgun Gothic",sans-serif; font-size:10pt; color:#222; }
-        h1 { font-size:18pt; color:#1e3a5f; border-bottom:2px solid #1e3a5f; padding-bottom:6pt; }
-        .meta { color:#666; font-size:9pt; margin-bottom:16pt; }
-        .section { margin-bottom:20pt; page-break-inside:avoid; }
-        .section h2 { font-size:13pt; color:#1e3a5f; border-left:4px solid #1e3a5f; padding-left:8pt; margin-bottom:8pt; }
-        .badge { font-size:9pt; color:#666; background:#eee; padding:2pt 6pt; border-radius:3pt; margin-left:6pt; }
-        p { line-height:1.8; white-space:pre-wrap; }
-        table { border-collapse:collapse; width:100%; margin:8pt 0; font-size:9pt; }
-        th { background:#1e3a5f; color:#fff; padding:5pt; border:1px solid #ccc; }
-        td { padding:5pt; border:1px solid #ccc; }
-        .center { text-align:center; }
-        ul { margin:4pt 0; padding-left:16pt; }
-        li { margin-bottom:3pt; }
-        .note { color:#999; font-size:8pt; margin-top:24pt; border-top:1px solid #eee; padding-top:8pt; }
-      </style>
-      </head><body>
-      <h1>${plan.announcementTitle}</h1>
-      <p class="meta">사업계획서 초안 · 생성일: ${plan.createdAt.toLocaleDateString("ko-KR")} · 예상 점수율: ${plan.selfDiagnosticReport.percentage}% (${plan.selfDiagnosticReport.totalScore}/${plan.selfDiagnosticReport.maxScore}점)</p>
-      ${sectionsHtml}
-      <div class="section">
-        <h2>📊 자가진단 리포트</h2>
-        <table>
-          <tr><th>평가항목</th><th>예상점수</th><th>피드백</th></tr>
-          ${diagnosticRows}
-        </table>
-        <h3 style="margin-top:12pt;">✅ 강점</h3>
-        <ul>${plan.selfDiagnosticReport.strengths.map((s) => `<li>${s}</li>`).join("")}</ul>
-        <h3>⚠️ 보완 필요 사항</h3>
-        <ul>${plan.selfDiagnosticReport.improvements.map((s) => `<li>${s}</li>`).join("")}</ul>
-      </div>
-      <p class="note">※ AI가 생성한 초안은 반드시 본인이 검토·수정 후 제출하세요.</p>
-      </body></html>`);
-    printWindow.document.close();
-    printWindow.focus();
-    setTimeout(() => { printWindow.print(); }, 500);
+    if (plan && !openPrintView(plan)) showToast("팝업이 차단되었습니다. 팝업을 허용해주세요.");
   };
 
   const handleDownloadText = () => {
     if (!plan) return;
-    const content = [
-      `# ${plan.announcementTitle} — 사업계획서 초안`,
-      `생성일: ${plan.createdAt.toLocaleDateString("ko-KR")}`,
-      "",
-      ...plan.sections.map(
-        (s) => `## ${s.title}\n\n${s.content}`
-      ),
-      "",
-      "---",
-      "## 자가진단 리포트",
-      `예상 점수: ${plan.selfDiagnosticReport.totalScore} / ${plan.selfDiagnosticReport.maxScore}점 (${plan.selfDiagnosticReport.percentage}%)`,
-      "",
-      "### 강점",
-      ...plan.selfDiagnosticReport.strengths.map((s) => `- ${s}`),
-      "",
-      "### 보완 필요 사항",
-      ...plan.selfDiagnosticReport.improvements.map((s) => `- ${s}`),
-    ].join("\n");
-
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `사업계획서_초안_${Date.now()}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(new Blob([buildText(plan)], { type: "text/plain;charset=utf-8" }), safeFileName(plan, "txt"));
   };
 
   if (!plan) return null;
@@ -210,11 +150,20 @@ export default function ResultPage() {
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-10">
       <div className="mx-auto max-w-3xl">
+        <Stepper current={3} />
         {/* 헤더 */}
         <div className="mb-6 text-center">
-          <div className="mb-2 text-sm font-semibold text-blue-600">STEP 03 / 03</div>
           <h1 className="mb-1 text-2xl font-bold text-gray-900">사업계획서 초안 완성</h1>
           <p className="text-sm text-gray-500">{plan.announcementTitle}</p>
+          <div className="mt-2 flex items-center justify-center gap-3 text-xs text-gray-400">
+            <span className="flex items-center gap-1">
+              {saveState === "saving" ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3 text-green-500" />}
+              {saveState === "saving" ? "저장 중..." : "이 브라우저에 자동 저장됨"}
+            </span>
+            <button onClick={() => router.push("/saved")} className="flex items-center gap-1 text-blue-600 hover:underline">
+              <FolderOpen className="h-3 w-3" />저장한 계획서
+            </button>
+          </div>
         </div>
 
         {/* 점수 요약 카드 */}
@@ -286,9 +235,35 @@ export default function ResultPage() {
                 </button>
                 {expandedSections.has(i) && (
                   <div className="border-t px-5 py-4">
-                    <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-gray-700">
-                      {section.content}
-                    </pre>
+                    <textarea
+                      value={section.content}
+                      onChange={(e) => updateContent(i, e.target.value)}
+                      rows={Math.min(18, Math.max(6, Math.ceil(section.content.length / 40)))}
+                      className="w-full resize-y rounded-lg border border-gray-200 p-3 text-sm leading-relaxed text-gray-800 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                    <div className="mt-1 flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1 text-gray-400"><Pencil className="h-3 w-3" />직접 수정할 수 있어요</span>
+                      <span className={section.charLimit && section.content.length > section.charLimit ? "font-semibold text-red-600" : "text-gray-500"}>
+                        {section.content.length.toLocaleString()}자{section.charLimit ? ` / ${section.charLimit.toLocaleString()}자` : ""}
+                        {section.charLimit && section.content.length > section.charLimit ? " (초과)" : ""}
+                      </span>
+                    </div>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                      <input
+                        value={instructions[i] ?? ""}
+                        onChange={(e) => setInstructions((p) => ({ ...p, [i]: e.target.value }))}
+                        placeholder="AI에게 요청 (예: 수치를 더 구체적으로, 더 짧게)"
+                        className="flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
+                      />
+                      <button
+                        onClick={() => handleRegenerate(i)}
+                        disabled={regenIdx !== null}
+                        className="flex items-center justify-center gap-1.5 rounded-lg bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                      >
+                        {regenIdx === i ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                        {regenIdx === i ? "작성 중..." : "AI 재작성"}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -358,7 +333,7 @@ export default function ResultPage() {
               </div>
               <p className="text-sm text-blue-800">
                 보완 사항을 반영하여 각 섹션을 수정한 뒤, 가까운 창업지원기관에서 멘토링을 받아보세요.
-                초안은 TXT로 다운로드해 HWP/Word에서 편집하실 수 있습니다.
+                Word(.docx) 파일은 한글(HWP)에서도 열어 편집할 수 있습니다. 위 입력창에서 바로 수정하거나 AI 재작성도 가능해요.
               </p>
             </div>
           </div>
@@ -369,10 +344,11 @@ export default function ResultPage() {
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={handleDownloadDocx}
-              className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 font-semibold text-white hover:bg-blue-700"
+              disabled={busyDoc}
+              className="disabled:opacity-60 flex items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 font-semibold text-white hover:bg-blue-700"
             >
-              <FileText className="h-5 w-5" />
-              DOC 다운로드
+              {busyDoc ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileText className="h-5 w-5" />}
+              Word(.docx) 다운로드
             </button>
             <button
               onClick={handleDownloadPdf}
@@ -404,6 +380,11 @@ export default function ResultPage() {
           ※ AI 초안은 반드시 본인이 검토·수정 후 제출하세요. 최종 제출 전 멘토링을 권장합니다.
         </p>
       </div>
+      {toast && (
+        <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 rounded-full bg-gray-900 px-5 py-2.5 text-sm text-white shadow-lg">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
